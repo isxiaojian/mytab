@@ -1,10 +1,15 @@
-// --- Clock & Greeting ---
+// --- Clock ---
 function updateClock() {
   const now = new Date();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const seconds = String(now.getSeconds()).padStart(2, '0');
-  document.getElementById('clock').textContent = `${hours}:${minutes}:${seconds}`;
+  const weekDays = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const w = weekDays[now.getDay()];
+  const h = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  const s = String(now.getSeconds()).padStart(2, '0');
+  document.getElementById('clock').textContent = `${y}年${m}月${d}日 ${w} ${h}:${min}:${s}`;
 }
 updateClock();
 setInterval(updateClock, 1000);
