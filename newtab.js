@@ -165,7 +165,7 @@ searchInput.addEventListener('input', () => {
   const query = searchInput.value.trim().toLowerCase();
 
   // 过滤网站卡片（即时响应）
-  const cards = document.querySelectorAll('.site-card:not(.empty):not(.add-card)');
+  const cards = document.querySelectorAll('.site-card:not(.empty)');
   cards.forEach((card) => {
     const name = (card.querySelector('.site-name')?.textContent || '').toLowerCase();
     const title = (card.title || '').toLowerCase();
@@ -237,7 +237,7 @@ searchInput.addEventListener('keydown', (e) => {
   }
 
   // 如果过滤后有匹配的网站卡片，打开第一个可见的
-  const visible = document.querySelector('.site-card:not(.filtered-out):not(.empty):not(.add-card)');
+  const visible = document.querySelector('.site-card:not(.filtered-out):not(.empty)');
   if (query && visible) {
     const url = visible.dataset.url || visible.href;
     if (url && url.startsWith('http')) {
@@ -434,17 +434,78 @@ async function getTopSitesFromHistory() {
     .sort((a, b) => b.count - a.count);
 }
 
-let editMode = false;
-let dragSourcePos = null;
+let menuCard = null;
 let currentSlots = [];
-let currentPinned = {};
+let dragSrcPos = null;
+
+function hideCardMenu() {
+  const existing = document.querySelector('.card-menu');
+  if (existing) existing.remove();
+  const btn = document.querySelector('.kebab-btn.open');
+  if (btn) btn.classList.remove('open');
+  menuCard = null;
+}
+
+function showCardMenu(card, position, site, pinned) {
+  hideCardMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'card-menu show';
+
+  const addItem = (label, cls, action) => {
+    const item = document.createElement('button');
+    item.className = 'card-menu-item' + (cls ? ' ' + cls : '');
+    item.textContent = label;
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hideCardMenu();
+      action();
+    });
+    menu.appendChild(item);
+  };
+
+  if (site.pinned) {
+    addItem('重命名', '', () => {
+      const nameEl = card.querySelector('.site-name');
+      startRename(nameEl, position, pinned);
+    });
+    addItem('取消固定', '', async () => {
+      delete pinned[position];
+      compactPinned(pinned);
+      await savePinned(pinned);
+      buildMergedGrid(pinned);
+    });
+    addItem('移除', 'danger', () => removeCard(position, site, pinned));
+  } else {
+    addItem('固定到此位置', '', () => togglePin(position, site, pinned));
+    addItem('移除', 'danger', async () => {
+      const hiddenSet = await loadHidden();
+      hiddenSet.add(site.url);
+      await saveHidden(hiddenSet);
+      cachedDynamicSites = cachedDynamicSites.filter((s) => s.url !== site.url);
+      buildMergedGrid(pinned);
+    });
+  }
+
+  card.appendChild(menu);
+  menuCard = card;
+
+  // Click outside to close
+  const close = (e) => {
+    if (!menu.contains(e.target)) {
+      hideCardMenu();
+      document.removeEventListener('click', close);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
 
 function renderGrid(slots, pinned) {
-  currentSlots = slots;
-  currentPinned = pinned;
-
   const grid = document.getElementById('sitesGrid');
   grid.innerHTML = '';
+
+  currentSlots = slots;
 
   const hasContent = slots.some((s) => s !== null);
   if (!hasContent) {
@@ -459,11 +520,22 @@ function renderGrid(slots, pinned) {
     if (!site) {
       const empty = document.createElement('div');
       empty.className = 'site-card empty';
-      if (editMode) {
-        empty.dataset.position = position;
-        empty.addEventListener('dragover', handleDragOver);
-        empty.addEventListener('drop', (e) => handleDrop(e, position));
-      }
+      empty.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        empty.classList.add('drag-over');
+      });
+      empty.addEventListener('dragleave', () => {
+        empty.classList.remove('drag-over');
+      });
+      empty.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        empty.classList.remove('drag-over');
+        if (dragSrcPos !== null && dragSrcPos !== position) {
+          handleDrop(dragSrcPos, position, pinned);
+        }
+      });
       grid.appendChild(empty);
       continue;
     }
@@ -485,64 +557,33 @@ function renderGrid(slots, pinned) {
     card.dataset.position = position;
     card.dataset.url = url;
 
-    if (editMode) {
-      card.draggable = true;
-      card.addEventListener('dragstart', (e) => handleDragStart(e, position));
-      card.addEventListener('dragover', handleDragOver);
-      card.addEventListener('drop', (e) => handleDrop(e, position));
-      card.addEventListener('dragend', handleDragEnd);
-    }
-
     const icon = createIconEl(url, domain);
     card.appendChild(icon);
 
     const name = document.createElement('div');
     name.className = 'site-name';
     name.textContent = title || domain;
-    // 编辑模式下点击名称可重命名
-    if (site.pinned) {
-      name.addEventListener('click', (e) => {
-        if (!editMode) return;
-        e.preventDefault();
-        e.stopPropagation();
-        startRename(name, position, pinned);
-      });
-      if (editMode) name.style.cursor = 'text';
-    }
     card.appendChild(name);
 
-    // Pinned indicator dot (normal mode)
     const dot = document.createElement('div');
     dot.className = 'pinned-dot';
     card.appendChild(dot);
 
-    // Pin button (edit mode, unpinned cards only)
-    if (!site.pinned) {
-      const pinBtn = document.createElement('button');
-      pinBtn.className = 'pin-btn';
-      pinBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>';
-      pinBtn.title = '固定到此位置';
-      pinBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        togglePin(position, site, pinned);
-      });
-      card.appendChild(pinBtn);
-    }
-
-    // Remove button (edit mode, pinned cards only)
-    if (site.pinned) {
-      const removeBtn = document.createElement('button');
-      removeBtn.className = 'remove-btn';
-      removeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="3" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-      removeBtn.title = '取消固定';
-      removeBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        removeCard(position, site, pinned);
-      });
-      card.appendChild(removeBtn);
-    }
+    // Kebab menu button
+    const kebab = document.createElement('button');
+    kebab.className = 'kebab-btn';
+    kebab.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="8" cy="3" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="8" cy="13" r="1.5"/></svg>';
+    kebab.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isOpen = kebab.classList.contains('open');
+      hideCardMenu();
+      if (!isOpen) {
+        kebab.classList.add('open');
+        showCardMenu(card, position, site, pinned);
+      }
+    });
+    card.appendChild(kebab);
 
     // Click navigation
     if (site.pinned) {
@@ -553,20 +594,85 @@ function renderGrid(slots, pinned) {
       });
     }
 
+    // Drag & Drop（锁定卡片不允许拖拽）
+    if (!site.locked) {
+      card.draggable = true;
+
+      card.addEventListener('dragstart', (e) => {
+        dragSrcPos = position;
+        card.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', '');
+      });
+
+      card.addEventListener('dragend', () => {
+        card.classList.remove('dragging');
+        document.querySelectorAll('.site-card.drag-over').forEach(c => c.classList.remove('drag-over'));
+        dragSrcPos = null;
+      });
+
+      card.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (dragSrcPos !== position) {
+          card.classList.add('drag-over');
+        }
+      });
+
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('drag-over');
+      });
+
+      card.addEventListener('drop', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        card.classList.remove('drag-over');
+        if (dragSrcPos !== null && dragSrcPos !== position) {
+          handleDrop(dragSrcPos, position, pinned);
+        }
+      });
+    }
+
     grid.appendChild(card);
   }
+}
 
-  // 编辑模式下添加 "+" 按钮
-  if (editMode) {
-    const addCard = document.createElement('div');
-    addCard.className = 'site-card add-card';
-    addCard.title = '添加网站';
-    addCard.innerHTML = '<span class="plus">+</span>';
-    addCard.addEventListener('click', () => showAddForm(pinned));
-    grid.appendChild(addCard);
+async function handleDrop(srcPos, dstPos, pinned) {
+  const srcSite = currentSlots[srcPos];
+  const dstSite = currentSlots[dstPos];
+  if (!srcSite || srcSite.locked) return;
+  if (dstSite && dstSite.locked) return;
+
+  // 两个都是动态卡片（未固定）：直接在缓存中交换位置，不固定任何一个
+  if (!srcSite.pinned && dstSite && !dstSite.pinned) {
+    const srcIdx = cachedDynamicSites.findIndex(s => s.url === srcSite.url);
+    const dstIdx = cachedDynamicSites.findIndex(s => s.url === dstSite.url);
+    if (srcIdx >= 0 && dstIdx >= 0) {
+      [cachedDynamicSites[srcIdx], cachedDynamicSites[dstIdx]] =
+        [cachedDynamicSites[dstIdx], cachedDynamicSites[srcIdx]];
+    }
+    buildMergedGrid(pinned);
+    return;
   }
 
-  updateEditModeUI();
+  const newPinned = {};
+
+  for (const [pos, site] of Object.entries(pinned)) {
+    const oldPos = parseInt(pos, 10);
+    let newPos = oldPos;
+    if (oldPos === srcPos) newPos = dstPos;
+    else if (dstSite && oldPos === dstPos) newPos = srcPos;
+    newPinned[newPos] = site;
+  }
+
+  // 拖拽源是非固定卡片 → 固定到目标位置
+  if (!srcSite.pinned) {
+    newPinned[dstPos] = { url: srcSite.url, title: srcSite.title, locked: true };
+  }
+
+  compactPinned(newPinned);
+  await savePinned(newPinned);
+  buildMergedGrid(newPinned);
 }
 
 function setFavicon(container, url, domain, size) {
@@ -592,29 +698,6 @@ function createIconEl(url, domain) {
   setFavicon(icon, url, domain, 24);
   return icon;
 }
-
-// --- Edit Mode ---
-function updateEditModeUI() {
-  const grid = document.getElementById('sitesGrid');
-  const toggle = document.getElementById('editToggle');
-
-  if (editMode) {
-    grid.classList.add('edit-mode');
-    toggle.textContent = '完成';
-    toggle.classList.add('active');
-  } else {
-    grid.classList.remove('edit-mode');
-    toggle.textContent = '编辑';
-    toggle.classList.remove('active');
-  }
-}
-
-document.getElementById('editToggle').addEventListener('click', () => {
-  editMode = !editMode;
-  updateEditModeUI();
-  // Rebuild to apply/remove drag attributes
-  loadPinned().then((pinned) => buildMergedGrid(pinned));
-});
 
 // --- Pin ---
 async function togglePin(position, site, pinned) {
@@ -645,71 +728,6 @@ async function removeCard(position, site, pinned) {
 
   await savePinned(pinned);
   buildMergedGrid(pinned);
-}
-
-// --- Drag & Drop ---
-function handleDragStart(e, position) {
-  dragSourcePos = position;
-  e.target.classList.add('dragging');
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', position);
-}
-
-function handleDragOver(e) {
-  e.preventDefault();
-  e.dataTransfer.dropEffect = 'move';
-  e.currentTarget.classList.add('drag-over');
-}
-
-function handleDragEnd(e) {
-  e.target.classList.remove('dragging');
-  document.querySelectorAll('.drag-over').forEach((el) => el.classList.remove('drag-over'));
-  dragSourcePos = null;
-}
-
-async function handleDrop(e, targetPos) {
-  e.preventDefault();
-  e.currentTarget.classList.remove('drag-over');
-
-  if (dragSourcePos === null || dragSourcePos === targetPos) return;
-
-  // 从 currentSlots 收集所有非空卡片
-  const items = [];
-  for (const slot of currentSlots) {
-    if (slot) items.push({ url: slot.url, title: slot.title });
-  }
-
-  const srcIdx = dragSourcePos;
-  const dstIdx = targetPos;
-
-  if (srcIdx >= items.length || srcIdx < 0) return;
-
-  // 移动元素
-  const [moved] = items.splice(srcIdx, 1);
-  items.splice(dstIdx, 0, moved);
-
-  // 构建旧的 locked 状态映射（url -> locked）
-  const oldLocked = {};
-  for (const s of Object.values(currentPinned)) {
-    oldLocked[s.url] = !!s.locked;
-  }
-
-  // 所有卡片固定到新位置，保留已有的 locked 状态
-  const newPinned = {};
-  for (let i = 0; i < items.length; i++) {
-    newPinned[i] = {
-      url: items[i].url,
-      title: items[i].title,
-      locked: !!oldLocked[items[i].url],
-    };
-  }
-
-  // 从动态缓存中移除已固定的 URL
-  const pinnedUrls = new Set(Object.values(newPinned).map((s) => s.url));
-  cachedDynamicSites = cachedDynamicSites.filter((s) => !pinnedUrls.has(s.url));
-
-  await savePinned(newPinned);
-  buildMergedGrid(newPinned);
 }
 
 // --- Rename ---
@@ -915,7 +933,7 @@ document.getElementById('rankToggle').addEventListener('click', () => {
   const btn = document.getElementById('rankToggle');
   const isOpen = panel.classList.toggle('open');
   btn.classList.toggle('active', isOpen);
-  btn.textContent = isOpen ? '收起排行' : '访问排行';
+  btn.textContent = isOpen ? '收起排行' : 'TOP访问';
 });
 
 loadTopSites();
