@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "mytab",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "在新标签页展示访问频率最高的前30个网站",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
