@@ -971,7 +971,7 @@ function showCardMenu(card, position, site, pinned) {
   const addGroupActions = () => {
     addItem('设为工作', '', () => applyManualGroup(site, 'work'));
     addItem('设为学习', '', () => applyManualGroup(site, 'study'));
-    addItem('设为娱乐', '', () => applyManualGroup(site, 'fun'));
+
     addItem('设为工具', '', () => applyManualGroup(site, 'tool'));
     addItem('设为其他', '', () => applyManualGroup(site, 'other'));
     addItem('恢复自动', '', () => applyManualGroup(site, null));
