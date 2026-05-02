@@ -354,8 +354,12 @@ function renderSearchResults(results) {
     row.appendChild(info);
     row.appendChild(badge);
 
-    row.addEventListener('click', () => {
-      chrome.tabs.update({ url: item.url });
+    row.addEventListener('click', (e) => {
+      if (e.button === 1 || e.ctrlKey || e.metaKey) {
+        chrome.tabs.create({ url: item.url, active: false });
+      } else {
+        chrome.tabs.update({ url: item.url });
+      }
       hideSearchResults();
     });
 
@@ -1117,7 +1121,11 @@ function renderGrid(slots, pinned) {
     card.style.cursor = 'pointer';
     card.addEventListener('click', (e) => {
       if (e.target.closest('button')) return;
-      chrome.tabs.update({ url });
+      if (e.button === 1 || e.ctrlKey || e.metaKey) {
+        chrome.tabs.create({ url, active: false });
+      } else {
+        chrome.tabs.update({ url });
+      }
     });
 
     // Drag & Drop（锁定卡片不允许拖拽）
@@ -1703,7 +1711,13 @@ function renderUsageTopList(container, domains) {
     li.appendChild(icon);
     li.appendChild(domain);
     li.appendChild(count);
-    li.addEventListener('click', () => chrome.tabs.update({ url: item.url }));
+    li.addEventListener('click', (e) => {
+      if (e.button === 1 || e.ctrlKey || e.metaKey) {
+        chrome.tabs.create({ url: item.url, active: false });
+      } else {
+        chrome.tabs.update({ url: item.url });
+      }
+    });
 
     list.appendChild(li);
   });
