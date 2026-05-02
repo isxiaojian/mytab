@@ -86,6 +86,7 @@ const searchResultsInner = document.getElementById('searchResultsInner');
 let searchActiveIndex = -1;
 let currentSearchResults = [];
 let searchFilledFromDropdown = false;
+let activeSiteGroup = 'all';
 
 // --- Search Engine ---
 const ENGINE_KEY = 'mytab_search_engine';
@@ -178,11 +179,12 @@ document.addEventListener('click', (e) => {
 
 // --- Search Suggestions ---
 let suggestController = null;
+let searchRequestSeq = 0;
 
 async function fetchSuggestions(query) {
   const engine = SEARCH_ENGINES[currentEngine];
   if (!engine.getSuggestUrl) {
-    return fetchBaiduSuggestions(query);
+    return [];
   }
 
   try {
@@ -195,34 +197,6 @@ async function fetchSuggestions(query) {
     if (e.name !== 'AbortError') return [];
     return [];
   }
-}
-
-function fetchBaiduSuggestions(query) {
-  return new Promise((resolve) => {
-    const cb = '__bs_cb_' + crypto.randomUUID();
-    const script = document.createElement('script');
-    const timeout = setTimeout(() => {
-      delete window[cb];
-      script.remove();
-      resolve([]);
-    }, 3000);
-
-    window[cb] = (data) => {
-      clearTimeout(timeout);
-      delete window[cb];
-      script.remove();
-      resolve((data && Array.isArray(data.s)) ? data.s : []);
-    };
-
-    script.src = `https://suggestion.baidu.com/su?wd=${encodeURIComponent(query)}&cb=${cb}`;
-    script.onerror = () => {
-      clearTimeout(timeout);
-      delete window[cb];
-      script.remove();
-      resolve([]);
-    };
-    document.head.appendChild(script);
-  });
 }
 
 function renderSuggestions(suggestions) {
@@ -265,6 +239,10 @@ let cachedBookmarks = [];
 
 async function loadBookmarks() {
   try {
+    if (!(await hasOptionalPermission(BOOKMARKS_PERMISSION))) {
+      cachedBookmarks = [];
+      return;
+    }
     const tree = await chrome.bookmarks.getTree();
     cachedBookmarks = flattenBookmarks(tree);
   } catch (_) {
@@ -385,6 +363,23 @@ function renderSearchResults(results) {
   });
 }
 
+function renderLocalSearchPermissionPrompt() {
+  const prompt = document.createElement('button');
+  prompt.className = 'search-permission-prompt';
+  prompt.type = 'button';
+  prompt.textContent = '启用书签和历史搜索';
+  prompt.addEventListener('click', async () => {
+    const granted = await requestOptionalPermissions([BOOKMARKS_PERMISSION, HISTORY_PERMISSION]);
+    if (!granted) return;
+    cachedHistoryItems = null;
+    cachedHistoryPromise = null;
+    await loadBookmarks();
+    await getCachedHistoryItems();
+    searchInput.dispatchEvent(new Event('input'));
+  });
+  searchResultsInner.appendChild(prompt);
+}
+
 function showSearchResults() {
   searchResults.classList.add('show');
 }
@@ -413,23 +408,31 @@ function collectSelectableItems() {
   return searchResultsInner.querySelectorAll('.search-result-item, .search-suggestion-item');
 }
 
+function applySiteFilters(queryLower = searchInput.value.trim().toLowerCase()) {
+  const cards = document.querySelectorAll('.site-card');
+  cards.forEach((card) => {
+    if (card.classList.contains('empty')) {
+      card.classList.toggle('filtered-out', !!queryLower || activeSiteGroup !== 'all');
+      return;
+    }
+
+    const name = (card.querySelector('.site-name')?.textContent || '').toLowerCase();
+    const title = (card.title || '').toLowerCase();
+    const group = card.dataset.group || 'other';
+    const matchesQuery = !queryLower || name.includes(queryLower) || title.includes(queryLower);
+    const matchesGroup = activeSiteGroup === 'all' || group === activeSiteGroup;
+    card.classList.toggle('filtered-out', !matchesQuery || !matchesGroup);
+  });
+}
+
 // 实时过滤图标 + 搜索建议/历史/书签
 searchInput.addEventListener('input', () => {
   searchFilledFromDropdown = false;
   const query = searchInput.value.trim();
   const queryLower = query.toLowerCase();
+  const requestSeq = ++searchRequestSeq;
 
-  // 过滤网站卡片（即时响应）
-  const cards = document.querySelectorAll('.site-card:not(.empty)');
-  cards.forEach((card) => {
-    const name = (card.querySelector('.site-name')?.textContent || '').toLowerCase();
-    const title = (card.title || '').toLowerCase();
-    if (!queryLower || name.includes(queryLower) || title.includes(queryLower)) {
-      card.classList.remove('filtered-out');
-    } else {
-      card.classList.add('filtered-out');
-    }
-  });
+  applySiteFilters(queryLower);
 
   clearTimeout(searchDebounceTimer);
   if (!query) {
@@ -438,10 +441,15 @@ searchInput.addEventListener('input', () => {
   }
 
   searchDebounceTimer = setTimeout(async () => {
+    const canSearchBookmarks = await hasOptionalPermission(BOOKMARKS_PERMISSION);
+    const canSearchHistory = await hasOptionalPermission(HISTORY_PERMISSION);
+    if (requestSeq !== searchRequestSeq || query !== searchInput.value.trim()) return;
+
     searchResultsInner.innerHTML = '';
 
     // 获取搜索建议
     const suggestions = await fetchSuggestions(query);
+    if (requestSeq !== searchRequestSeq || query !== searchInput.value.trim()) return;
     if (suggestions.length) {
       renderSuggestions(suggestions.slice(0, 6));
     }
@@ -452,9 +460,16 @@ searchInput.addEventListener('input', () => {
       renderSearchResults(results);
     }
 
+    if (!canSearchBookmarks || !canSearchHistory) {
+      renderLocalSearchPermissionPrompt();
+    }
+
     if (!suggestions.length && !results.length) {
-      searchResultsInner.innerHTML =
-        '<div class="search-results-empty">无匹配结果</div>';
+      const hasPrompt = searchResultsInner.querySelector('.search-permission-prompt');
+      if (!hasPrompt) {
+        searchResultsInner.innerHTML =
+          '<div class="search-results-empty">无匹配结果</div>';
+      }
     }
 
     showSearchResults();
@@ -585,38 +600,188 @@ function getInitial(domain) {
   return (domain.replace(/^www\./, '')[0] || '?').toUpperCase();
 }
 
+function getDomainFromUrl(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
 // --- Storage ---
 const PINNED_KEY = 'mytab_pinned';
 const HIDDEN_KEY = 'mytab_hidden';
+const GROUPS_KEY = 'mytab_site_groups';
 const MAX_SLOTS = 40;
+const HISTORY_PERMISSION = 'history';
+const BOOKMARKS_PERMISSION = 'bookmarks';
+const SITE_GROUPS = {
+  all: { label: '全部', color: '#5f6368' },
+  work: { label: '工作', color: '#1a73e8' },
+  study: { label: '学习', color: '#0f9d58' },
+  fun: { label: '娱乐', color: '#db4437' },
+  tool: { label: '工具', color: '#f4b400' },
+  other: { label: '其他', color: '#9aa0a6' },
+};
+const DEMO_SITES = [
+  { title: 'GitHub', url: 'https://github.com/' },
+  { title: 'MDN', url: 'https://developer.mozilla.org/' },
+  { title: 'YouTube', url: 'https://youtube.com/' },
+  { title: 'Google', url: 'https://google.com/' },
+  { title: 'Notion', url: 'https://notion.so/' },
+  { title: 'Stack Overflow', url: 'https://stackoverflow.com/' },
+  { title: 'ChatGPT', url: 'https://chatgpt.com/' },
+  { title: 'Bilibili', url: 'https://bilibili.com/' },
+];
+
+function isExtensionRuntime() {
+  return !!globalThis.chrome?.runtime?.id;
+}
+
+let siteGroupOverrides = {};
+
+async function loadSiteGroups() {
+  if (!isExtensionRuntime()) return {};
+  try {
+    const result = await chrome.storage.local.get(GROUPS_KEY);
+    const groups = result[GROUPS_KEY] || {};
+    normalizeSiteGroups(groups);
+    return groups;
+  } catch (_) {
+    return {};
+  }
+}
+
+async function saveSiteGroups(groups) {
+  if (!isExtensionRuntime()) return;
+  normalizeSiteGroups(groups);
+  await chrome.storage.local.set({ [GROUPS_KEY]: groups });
+}
+
+function normalizeSiteGroups(groups) {
+  for (const [url, group] of Object.entries(groups)) {
+    if (!url || !SITE_GROUPS[group] || group === 'all') {
+      delete groups[url];
+    }
+  }
+}
+
+function getManualGroup(url) {
+  return siteGroupOverrides[url] || null;
+}
+
+function getEffectiveGroup(site) {
+  if (site.group && SITE_GROUPS[site.group]) return site.group;
+  const manualGroup = getManualGroup(site.url);
+  if (manualGroup) return manualGroup;
+  return classifyDomain(site.domain || '').key;
+}
+
+function getGroupLabel(group) {
+  return SITE_GROUPS[group]?.label || SITE_GROUPS.other.label;
+}
+
+function getGroupColor(group) {
+  return SITE_GROUPS[group]?.color || SITE_GROUPS.other.color;
+}
+
+function setActiveGroup(group) {
+  activeSiteGroup = SITE_GROUPS[group] ? group : 'all';
+  document.querySelectorAll('.site-group-tab').forEach((item) => {
+    item.classList.toggle('active', item.dataset.group === activeSiteGroup);
+  });
+  applySiteFilters();
+}
+
+async function setSiteGroup(url, group) {
+  if (!url || !SITE_GROUPS[group] || group === 'all') return;
+  siteGroupOverrides[url] = group;
+  await saveSiteGroups(siteGroupOverrides);
+  buildMergedGrid(await loadPinned());
+}
+
+async function clearSiteGroup(url) {
+  if (!url) return;
+  delete siteGroupOverrides[url];
+  await saveSiteGroups(siteGroupOverrides);
+  buildMergedGrid(await loadPinned());
+}
+
+async function applyManualGroup(site, group) {
+  if (!site?.url) return;
+  if (!group) {
+    await clearSiteGroup(site.url);
+    return;
+  }
+  await setSiteGroup(site.url, group);
+  setActiveGroup(group);
+}
+
+async function moveSiteGroup(oldUrl, newUrl) {
+  if (!oldUrl || !newUrl || oldUrl === newUrl) return;
+  const group = siteGroupOverrides[oldUrl];
+  if (!group) return;
+  delete siteGroupOverrides[oldUrl];
+  siteGroupOverrides[newUrl] = group;
+  await saveSiteGroups(siteGroupOverrides);
+}
+
+async function hasOptionalPermission(permission) {
+  try {
+    return await chrome.permissions.contains({ permissions: [permission] });
+  } catch (_) {
+    return false;
+  }
+}
+
+async function requestOptionalPermissions(permissions) {
+  try {
+    return await chrome.permissions.request({ permissions });
+  } catch (_) {
+    return false;
+  }
+}
 
 async function loadPinned() {
+  if (!isExtensionRuntime()) return {};
   const result = await chrome.storage.local.get(PINNED_KEY);
-  return result[PINNED_KEY] || {};
+  const pinned = result[PINNED_KEY] || {};
+  normalizePinned(pinned);
+  return pinned;
 }
 
 async function savePinned(pinned) {
+  if (!isExtensionRuntime()) return;
+  normalizePinned(pinned);
   await chrome.storage.local.set({ [PINNED_KEY]: pinned });
 }
 
 async function loadHidden() {
+  if (!isExtensionRuntime()) return new Set();
   const result = await chrome.storage.local.get(HIDDEN_KEY);
   return new Set(result[HIDDEN_KEY] || []);
 }
 
 async function saveHidden(hiddenSet) {
+  if (!isExtensionRuntime()) return;
   await chrome.storage.local.set({ [HIDDEN_KEY]: [...hiddenSet] });
 }
 
-function compactPinned(pinned) {
-  const entries = Object.entries(pinned)
-    .map(([pos, s]) => ({ pos: parseInt(pos, 10), site: s }))
-    .sort((a, b) => a.pos - b.pos);
-
-  for (const key of Object.keys(pinned)) delete pinned[key];
-  for (let i = 0; i < entries.length; i++) {
-    pinned[i] = entries[i].site;
+function normalizePinned(pinned) {
+  for (const key of Object.keys(pinned)) {
+    const pos = Number(key);
+    if (!Number.isInteger(pos) || pos < 0 || pos >= MAX_SLOTS || !pinned[key]?.url) {
+      delete pinned[key];
+    }
   }
+}
+
+function findFirstFreePosition(pinned) {
+  const occupied = new Set(Object.keys(pinned).map(Number));
+  for (let i = 0; i < MAX_SLOTS; i++) {
+    if (!occupied.has(i)) return i;
+  }
+  return -1;
 }
 
 // --- Dynamic sites cache ---
@@ -628,12 +793,14 @@ async function loadTopSites() {
   grid.innerHTML = '<div class="loading">加载中...</div>';
 
   try {
-    const [pinned, sites, hiddenSet] = await Promise.all([
+    const [pinned, sites, hiddenSet, groups] = await Promise.all([
       loadPinned(),
       fetchDynamicSites(),
       loadHidden(),
+      loadSiteGroups(),
     ]);
 
+    siteGroupOverrides = groups;
     // 过滤掉被隐藏的 URL
     cachedDynamicSites = sites.filter((s) => !hiddenSet.has(s.url));
     buildMergedGrid(pinned);
@@ -646,13 +813,21 @@ async function loadTopSites() {
 async function fetchDynamicSites() {
   let sites = [];
 
+  if (!isExtensionRuntime()) {
+    return DEMO_SITES;
+  }
+
   if (chrome.topSites) {
     sites = await new Promise((resolve) => {
       chrome.topSites.get((r) => resolve(r || []));
     });
   }
 
-  if (sites.length < MAX_SLOTS && chrome.history) {
+  if (
+    sites.length < MAX_SLOTS &&
+    chrome.history &&
+    await hasOptionalPermission(HISTORY_PERMISSION)
+  ) {
     const historySites = await getTopSitesFromHistory();
     const existingUrls = new Set(sites.map((s) => s.url));
     for (const hs of historySites) {
@@ -674,7 +849,15 @@ function buildMergedGrid(pinned) {
   for (const [pos, site] of Object.entries(pinned)) {
     const idx = parseInt(pos, 10);
     if (idx < MAX_SLOTS) {
-      slots[idx] = { ...site, pinned: true, locked: !!site.locked, position: idx };
+      const domain = getDomainFromUrl(site.url);
+      slots[idx] = {
+        ...site,
+        domain,
+        group: getEffectiveGroup({ ...site, domain }),
+        pinned: true,
+        locked: !!site.locked,
+        position: idx,
+      };
       pinnedUrls.add(site.url);
     }
   }
@@ -686,7 +869,15 @@ function buildMergedGrid(pinned) {
       di++;
     }
     if (di < cachedDynamicSites.length) {
-      slots[i] = { ...cachedDynamicSites[di], pinned: false, position: i };
+      const site = cachedDynamicSites[di];
+      const domain = getDomainFromUrl(site.url);
+      slots[i] = {
+        ...site,
+        domain,
+        group: getEffectiveGroup({ ...site, domain }),
+        pinned: false,
+        position: i,
+      };
       di++;
     }
   }
@@ -699,6 +890,10 @@ let cachedHistoryPromise = null;
 async function getCachedHistoryItems() {
   if (cachedHistoryItems) return cachedHistoryItems;
   if (cachedHistoryPromise) return cachedHistoryPromise;
+  if (!(await hasOptionalPermission(HISTORY_PERMISSION))) {
+    cachedHistoryItems = [];
+    return cachedHistoryItems;
+  }
   const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
   cachedHistoryPromise = new Promise((resolve) => {
     chrome.history.search(
@@ -773,6 +968,15 @@ function showCardMenu(card, position, site, pinned) {
     menu.appendChild(item);
   };
 
+  const addGroupActions = () => {
+    addItem('设为工作', '', () => applyManualGroup(site, 'work'));
+    addItem('设为学习', '', () => applyManualGroup(site, 'study'));
+    addItem('设为娱乐', '', () => applyManualGroup(site, 'fun'));
+    addItem('设为工具', '', () => applyManualGroup(site, 'tool'));
+    addItem('设为其他', '', () => applyManualGroup(site, 'other'));
+    addItem('恢复自动', '', () => applyManualGroup(site, null));
+  };
+
   if (site.pinned) {
     addItem('重命名', '', () => {
       const nameEl = card.querySelector('.site-name');
@@ -781,9 +985,9 @@ function showCardMenu(card, position, site, pinned) {
     addItem('编辑网址', '', () => {
       showEditUrlModal(position, site, pinned);
     });
+    addGroupActions();
     addItem('取消固定', '', async () => {
       delete pinned[position];
-      compactPinned(pinned);
       await savePinned(pinned);
       buildMergedGrid(pinned);
     });
@@ -796,6 +1000,7 @@ function showCardMenu(card, position, site, pinned) {
     addItem('编辑网址', '', () => {
       showEditUrlModal(position, site, pinned);
     });
+    addGroupActions();
     addItem('固定到此位置', '', () => togglePin(position, site, pinned));
     addItem('移除', 'danger', async () => {
       const hiddenSet = await loadHidden();
@@ -858,12 +1063,7 @@ function renderGrid(slots, pinned) {
     }
 
     const { url, title } = site;
-    let domain;
-    try {
-      domain = new URL(url).hostname.replace(/^www\./, '');
-    } catch {
-      domain = url;
-    }
+    const domain = site.domain || getDomainFromUrl(url);
 
     const card = document.createElement('div');
     card.className = 'site-card';
@@ -872,6 +1072,7 @@ function renderGrid(slots, pinned) {
     card.title = title || domain;
     card.dataset.position = position;
     card.dataset.url = url;
+    card.dataset.group = site.group || classifyDomain(domain).key;
 
     const icon = createIconEl(url, domain);
     card.appendChild(icon);
@@ -881,8 +1082,19 @@ function renderGrid(slots, pinned) {
     name.textContent = title || domain;
     card.appendChild(name);
 
+    if (site.manualGroup) {
+      const groupLabel = document.createElement('div');
+      groupLabel.className = 'site-group-label';
+      groupLabel.textContent = getGroupLabel(site.manualGroup);
+      groupLabel.style.borderColor = getGroupColor(site.manualGroup);
+      groupLabel.style.color = getGroupColor(site.manualGroup);
+      card.appendChild(groupLabel);
+    }
+
     const dot = document.createElement('div');
     dot.className = 'pinned-dot';
+    dot.title = '已锁定';
+    dot.innerHTML = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
     card.appendChild(dot);
 
     // Kebab menu button
@@ -949,6 +1161,8 @@ function renderGrid(slots, pinned) {
 
     grid.appendChild(card);
   }
+
+  applySiteFilters();
 }
 
 async function handleDrop(srcPos, dstPos, pinned) {
@@ -984,12 +1198,20 @@ async function handleDrop(srcPos, dstPos, pinned) {
     newPinned[dstPos] = { url: srcSite.url, title: srcSite.title, locked: false };
   }
 
-  compactPinned(newPinned);
   await savePinned(newPinned);
   buildMergedGrid(newPinned);
 }
 
 function setFavicon(container, url, domain, size) {
+  if (!isExtensionRuntime()) {
+    const fb = document.createElement('div');
+    fb.className = 'fallback';
+    fb.style.background = getColorForDomain(domain);
+    fb.textContent = getInitial(domain);
+    container.appendChild(fb);
+    return;
+  }
+
   const dpr = Math.ceil(window.devicePixelRatio || 1);
   const img = document.createElement('img');
   img.src = `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(url)}&size=${size * dpr}`;
@@ -1019,7 +1241,6 @@ async function togglePin(position, site, pinned) {
   for (const [pos, s] of Object.entries(pinned)) {
     if (s.url === site.url) delete pinned[pos];
   }
-  compactPinned(pinned);
   pinned[position] = { url: site.url, title: site.title, locked: true };
   await savePinned(pinned);
   buildMergedGrid(pinned);
@@ -1030,7 +1251,6 @@ async function removeCard(position, site, pinned) {
   if (!site.pinned) return;
 
   delete pinned[position];
-  compactPinned(pinned);
 
   // 加入隐藏列表，避免再次出现
   const hiddenSet = await loadHidden();
@@ -1074,7 +1294,6 @@ function startRename(nameEl, position, pinned) {
       const site = currentSlots[position];
       if (site) {
         pinned[position] = { url: site.url, title: newName, locked: false };
-        compactPinned(pinned);
         await savePinned(pinned);
         buildMergedGrid(pinned);
       }
@@ -1161,13 +1380,14 @@ function showAddFormModal(titleText, urlValue, nameValue, onConfirm) {
 function showEditUrlModal(position, site, pinned) {
   const titleValue = (pinned[position] && pinned[position].title) || site.title || '';
   showAddFormModal('编辑网站', site.url, titleValue, async (url, name) => {
+    const previousUrl = (pinned[position] && pinned[position].url) || site.url;
     if (pinned[position]) {
       pinned[position].url = url;
       pinned[position].title = name;
     } else {
       pinned[position] = { url, title: name, locked: false };
-      compactPinned(pinned);
     }
+    await moveSiteGroup(previousUrl, url);
     await savePinned(pinned);
     buildMergedGrid(pinned);
   });
@@ -1176,21 +1396,13 @@ function showEditUrlModal(position, site, pinned) {
 // --- Add Form ---
 function showAddForm(pinned) {
   showAddFormModal('添加网站', '', '', async (url, name) => {
-    let targetPos = -1;
-    const occupied = Object.keys(pinned).map(Number);
-    if (occupied.length) {
-      targetPos = Math.max(...occupied) + 1;
-    } else {
-      targetPos = 0;
-    }
-
-    if (targetPos >= MAX_SLOTS) return;
-
     // 移除同 URL 的旧固定
     for (const [pos, s] of Object.entries(pinned)) {
       if (s.url === url) delete pinned[pos];
     }
-    compactPinned(pinned);
+
+    const targetPos = findFirstFreePosition(pinned);
+    if (targetPos < 0) return;
 
     // 从隐藏列表中移除
     const hiddenSet = await loadHidden();
@@ -1206,68 +1418,283 @@ function showAddForm(pinned) {
   });
 }
 
-// --- Domain Ranking ---
+// --- Usage Stats ---
+const USAGE_RANGES = {
+  today: { label: '今天', days: 1, fromStartOfDay: true },
+  '7d': { label: '7天', days: 7 },
+  '30d': { label: '30天', days: 30 },
+};
+const CATEGORY_RULES = [
+  {
+    key: 'work',
+    label: '工作',
+    color: '#1a73e8',
+    domains: ['github.com', 'gitlab.com', 'docs.google.com', 'notion.so', 'figma.com', 'linear.app', 'slack.com', 'trello.com'],
+  },
+  {
+    key: 'study',
+    label: '学习',
+    color: '#0f9d58',
+    domains: ['developer.mozilla.org', 'stackoverflow.com', 'wikipedia.org', 'medium.com', 'dev.to', 'coursera.org', 'udemy.com'],
+  },
+  {
+    key: 'fun',
+    label: '娱乐',
+    color: '#db4437',
+    domains: ['youtube.com', 'bilibili.com', 'netflix.com', 'reddit.com', 'twitter.com', 'x.com', 'instagram.com'],
+  },
+  {
+    key: 'tool',
+    label: '工具',
+    color: '#f4b400',
+    domains: ['google.com', 'bing.com', 'baidu.com', 'chatgpt.com', 'openai.com', 'translate.google.com', 'npmjs.com'],
+  },
+  {
+    key: 'other',
+    label: '其他',
+    color: '#9aa0a6',
+    domains: [],
+  },
+];
+
+let currentUsageRange = 'today';
+
 async function loadRanking() {
-  const list = document.getElementById('rankList');
-  list.innerHTML = '<li class="loading" style="grid-column:auto;padding:12px;font-size:12px">加载中...</li>';
+  await loadUsageStats(currentUsageRange);
+}
+
+async function loadUsageStats(rangeKey) {
+  const content = document.getElementById('usageContent');
+  content.innerHTML = '<div class="usage-loading">加载中...</div>';
 
   try {
-    const historyItems = await getCachedHistoryItems();
-
-    const domainMap = new Map();
-    for (const item of historyItems) {
-      try {
-        const hostname = new URL(item.url).hostname.replace(/^www\./, '');
-        const existing = domainMap.get(hostname);
-        if (existing) {
-          existing.count += item.visitCount || 1;
-        } else {
-          domainMap.set(hostname, {
-            domain: hostname,
-            url: item.url,
-            count: item.visitCount || 1,
-          });
-        }
-      } catch (_) {}
+    if (!(await hasOptionalPermission(HISTORY_PERMISSION))) {
+      renderHistoryPermissionPrompt();
+      return;
     }
 
-    const ranked = [...domainMap.values()]
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 16);
+    const range = getUsageRange(rangeKey);
+    const previousRange = getPreviousUsageRange(range, rangeKey);
+    const [currentStats, previousStats] = await Promise.all([
+      collectUsageStats(range.start, range.end),
+      collectUsageStats(previousRange.start, previousRange.end),
+    ]);
 
-    renderRanking(ranked);
+    renderUsageStats(currentStats, previousStats, rangeKey);
   } catch (err) {
-    list.innerHTML = '';
+    content.innerHTML = '<div class="usage-empty">无法加载使用统计</div>';
   }
 }
 
-function renderRanking(ranked) {
-  const list = document.getElementById('rankList');
-  list.innerHTML = '';
+function getUsageRange(rangeKey) {
+  const now = Date.now();
+  const config = USAGE_RANGES[rangeKey] || USAGE_RANGES.today;
+  let start;
 
-  if (!ranked.length) return;
+  if (config.fromStartOfDay) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    start = today.getTime();
+  } else {
+    start = now - config.days * 24 * 60 * 60 * 1000;
+  }
 
-  ranked.forEach((item, i) => {
+  return { start, end: now };
+}
+
+function getPreviousUsageRange(range, rangeKey) {
+  const duration = range.end - range.start;
+  if (rangeKey === 'today') {
+    const previousStart = range.start - 24 * 60 * 60 * 1000;
+    return {
+      start: previousStart,
+      end: previousStart + duration,
+    };
+  }
+
+  return {
+    start: range.start - duration,
+    end: range.start,
+  };
+}
+
+async function collectUsageStats(startTime, endTime) {
+  const historyItems = await new Promise((resolve) => {
+    chrome.history.search(
+      { text: '', startTime, endTime, maxResults: 2000 },
+      (results) => resolve(results || [])
+    );
+  });
+
+  const domainMap = new Map();
+  await Promise.all(historyItems.map(async (item) => {
+    let parsed;
+    try {
+      parsed = new URL(item.url);
+    } catch (_) {
+      return;
+    }
+
+    const visits = await getVisitsForUrl(item.url);
+    const visitsInRange = visits.filter((visit) =>
+      visit.visitTime >= startTime && visit.visitTime < endTime
+    );
+    if (!visitsInRange.length) return;
+
+    const domain = parsed.hostname.replace(/^www\./, '');
+    const existing = domainMap.get(domain);
+    const count = visitsInRange.length;
+    if (existing) {
+      existing.count += count;
+    } else {
+      domainMap.set(domain, {
+        domain,
+        title: item.title || domain,
+        url: `${parsed.protocol}//${parsed.hostname}/`,
+        count,
+      });
+    }
+  }));
+
+  const domains = [...domainMap.values()].sort((a, b) => b.count - a.count);
+  const totalVisits = domains.reduce((sum, item) => sum + item.count, 0);
+  const categoryTotals = buildCategoryTotals(domains);
+
+  return {
+    totalVisits,
+    activeDomains: domains.length,
+    topDomain: domains[0] || null,
+    domains,
+    categoryTotals,
+  };
+}
+
+function getVisitsForUrl(url) {
+  return new Promise((resolve) => {
+    chrome.history.getVisits({ url }, (visits) => resolve(visits || []));
+  });
+}
+
+function buildCategoryTotals(domains) {
+  const totals = new Map(CATEGORY_RULES.map((category) => [category.key, {
+    ...category,
+    count: 0,
+  }]));
+
+  for (const item of domains) {
+    const category = classifyDomain(item.domain);
+    totals.get(category.key).count += item.count;
+  }
+
+  return [...totals.values()].filter((category) => category.count > 0);
+}
+
+function classifyDomain(domain) {
+  for (const category of CATEGORY_RULES) {
+    if (category.key === 'other') continue;
+    if (category.domains.some((known) => domain === known || domain.endsWith('.' + known))) {
+      return category;
+    }
+  }
+  return CATEGORY_RULES.find((category) => category.key === 'other');
+}
+
+function renderHistoryPermissionPrompt() {
+  const content = document.getElementById('usageContent');
+  content.innerHTML = '';
+
+  const button = document.createElement('button');
+  button.className = 'rank-permission-prompt';
+  button.type = 'button';
+  button.textContent = '启用使用统计';
+  button.addEventListener('click', async () => {
+    const granted = await requestOptionalPermissions([HISTORY_PERMISSION]);
+    if (!granted) return;
+    cachedHistoryItems = null;
+    cachedHistoryPromise = null;
+    await loadTopSites();
+    await loadRanking();
+  });
+
+  const note = document.createElement('div');
+  note.className = 'usage-permission-note';
+  note.textContent = '统计仅在本地读取浏览历史生成。';
+
+  content.appendChild(button);
+  content.appendChild(note);
+}
+
+function renderUsageStats(stats, previousStats, rangeKey) {
+  const content = document.getElementById('usageContent');
+  content.innerHTML = '';
+
+  if (!stats.totalVisits) {
+    content.innerHTML = '<div class="usage-empty">这个时间段暂无浏览记录</div>';
+    return;
+  }
+
+  const summary = document.createElement('div');
+  summary.className = 'usage-summary';
+  summary.appendChild(createUsageMetric('访问次数', formatCount(stats.totalVisits)));
+  summary.appendChild(createUsageMetric('活跃站点', formatCount(stats.activeDomains)));
+  summary.appendChild(createUsageMetric('最常访问', stats.topDomain ? stats.topDomain.domain : '-'));
+  content.appendChild(summary);
+
+  const trend = document.createElement('div');
+  trend.className = 'usage-trend';
+  trend.textContent = formatTrend(stats.totalVisits, previousStats.totalVisits, rangeKey);
+  content.appendChild(trend);
+
+  renderUsageTopList(content, stats.domains.slice(0, 8));
+  renderCategoryBars(content, stats.categoryTotals, stats.totalVisits);
+}
+
+function createUsageMetric(label, value) {
+  const metric = document.createElement('div');
+  metric.className = 'usage-metric';
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'usage-metric-value';
+  valueEl.textContent = value;
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'usage-metric-label';
+  labelEl.textContent = label;
+
+  metric.appendChild(valueEl);
+  metric.appendChild(labelEl);
+  return metric;
+}
+
+function renderUsageTopList(container, domains) {
+  const section = document.createElement('div');
+  section.className = 'usage-section';
+
+  const title = document.createElement('div');
+  title.className = 'usage-section-title';
+  title.textContent = 'TOP 网站';
+  section.appendChild(title);
+
+  const list = document.createElement('ol');
+  list.className = 'rank-list';
+
+  domains.forEach((item, i) => {
     const li = document.createElement('li');
     li.className = 'rank-item';
     li.title = `${item.domain} - 访问 ${item.count} 次`;
 
-    // 序号
     const num = document.createElement('span');
     num.className = 'rank-num';
     num.textContent = i + 1;
 
-    // favicon
     const icon = document.createElement('span');
     icon.className = 'rank-favicon';
     setFavicon(icon, item.url, item.domain, 12);
 
-    // 域名
     const domain = document.createElement('span');
     domain.className = 'rank-domain';
     domain.textContent = item.domain;
 
-    // 次数
     const count = document.createElement('span');
     count.className = 'rank-count';
     count.textContent = formatCount(item.count);
@@ -1276,13 +1703,66 @@ function renderRanking(ranked) {
     li.appendChild(icon);
     li.appendChild(domain);
     li.appendChild(count);
-
-    li.addEventListener('click', () => {
-      chrome.tabs.update({ url: item.url });
-    });
+    li.addEventListener('click', () => chrome.tabs.update({ url: item.url }));
 
     list.appendChild(li);
   });
+
+  section.appendChild(list);
+  container.appendChild(section);
+}
+
+function renderCategoryBars(container, categories, totalVisits) {
+  const section = document.createElement('div');
+  section.className = 'usage-section';
+
+  const title = document.createElement('div');
+  title.className = 'usage-section-title';
+  title.textContent = '分类占比';
+  section.appendChild(title);
+
+  const sorted = [...categories].sort((a, b) => b.count - a.count);
+  sorted.forEach((category) => {
+    const percent = totalVisits ? Math.round((category.count / totalVisits) * 100) : 0;
+    const row = document.createElement('div');
+    row.className = 'usage-category';
+
+    const label = document.createElement('div');
+    label.className = 'usage-category-label';
+    const dot = document.createElement('span');
+    dot.style.background = category.color;
+    label.appendChild(dot);
+    label.appendChild(document.createTextNode(category.label));
+
+    const value = document.createElement('div');
+    value.className = 'usage-category-value';
+    value.textContent = `${percent}%`;
+
+    const bar = document.createElement('div');
+    bar.className = 'usage-category-bar';
+    const fill = document.createElement('div');
+    fill.style.width = `${percent}%`;
+    fill.style.background = category.color;
+    bar.appendChild(fill);
+
+    row.appendChild(label);
+    row.appendChild(value);
+    row.appendChild(bar);
+    section.appendChild(row);
+  });
+
+  container.appendChild(section);
+}
+
+function formatTrend(current, previous, rangeKey) {
+  const label = rangeKey === 'today' ? '较昨日同期' : '较上一周期';
+  if (!previous && !current) return `${label} 暂无变化`;
+  if (!previous) return `${label} 新增 ${formatCount(current)} 次`;
+
+  const diff = current - previous;
+  const percent = Math.round((diff / previous) * 100);
+  if (diff === 0) return `${label} 持平`;
+  return `${label} ${diff > 0 ? '+' : ''}${percent}%`;
 }
 
 function formatCount(n) {
@@ -1302,7 +1782,52 @@ document.getElementById('rankToggle').addEventListener('click', () => {
   const btn = document.getElementById('rankToggle');
   const isOpen = panel.classList.toggle('open');
   btn.classList.toggle('active', isOpen);
-  btn.textContent = isOpen ? '收起排行' : 'TOP访问';
+  btn.textContent = isOpen ? '收起统计' : '统计';
+});
+
+const siteGroupTabsEl = document.getElementById('siteGroupTabs');
+siteGroupTabsEl.addEventListener('click', (e) => {
+  const tab = e.target.closest('.site-group-tab');
+  if (!tab) return;
+  setActiveGroup(tab.dataset.group);
+});
+
+siteGroupTabsEl.addEventListener('dragover', (e) => {
+  const tab = e.target.closest('.site-group-tab');
+  if (!tab) return;
+  e.preventDefault();
+  tab.classList.add('drag-over');
+});
+
+siteGroupTabsEl.addEventListener('dragleave', (e) => {
+  const tab = e.target.closest('.site-group-tab');
+  if (tab) tab.classList.remove('drag-over');
+});
+
+siteGroupTabsEl.addEventListener('drop', async (e) => {
+  const tab = e.target.closest('.site-group-tab');
+  if (!tab) return;
+  e.preventDefault();
+  e.stopPropagation();
+  tab.classList.remove('drag-over');
+
+  if (dragSrcPos === null) return;
+  const site = currentSlots[dragSrcPos];
+  if (!site) return;
+
+  await applyManualGroup(site, tab.dataset.group);
+  setActiveGroup(tab.dataset.group);
+});
+
+document.getElementById('usageTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.usage-tab');
+  if (!tab) return;
+
+  currentUsageRange = tab.dataset.range;
+  document.querySelectorAll('.usage-tab').forEach((item) => {
+    item.classList.toggle('active', item === tab);
+  });
+  loadRanking();
 });
 
 loadTheme();

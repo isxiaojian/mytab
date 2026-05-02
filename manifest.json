@@ -1,12 +1,17 @@
 {
   "manifest_version": 3,
   "name": "mytab",
-  "version": "2.0.0",
-  "description": "在新标签页展示访问频率最高的前30个网站",
+  "version": "3.0.0",
+  "description": "在新标签页展示常用网站、搜索引擎和访问排行",
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },
-  "permissions": ["topSites", "history", "favicon", "storage", "bookmarks"],
+  "permissions": ["topSites", "favicon", "storage"],
+  "optional_permissions": ["history", "bookmarks"],
+  "host_permissions": [
+    "https://suggestqueries.google.com/*",
+    "https://api.bing.com/*"
+  ],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

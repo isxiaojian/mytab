@@ -4,11 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NTab</title>
-  <script>
-    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-      document.documentElement.classList.add('dark');
-    }
-  </script>
+  <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -59,15 +55,29 @@
             <button class="section-link" id="addSiteBtn" title="添加网站">
               <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             </button>
-            <button class="section-link" id="rankToggle">TOP访问</button>
+            <button class="section-link" id="rankToggle">统计</button>
           </div>
+        </div>
+        <div class="site-group-tabs" id="siteGroupTabs">
+          <button class="site-group-tab active" data-group="all">全部</button>
+          <button class="site-group-tab" data-group="work">工作</button>
+          <button class="site-group-tab" data-group="study">学习</button>
+          <button class="site-group-tab" data-group="fun">娱乐</button>
+          <button class="site-group-tab" data-group="tool">工具</button>
         </div>
         <div class="sites-grid" id="sitesGrid">
         </div>
       </div>
-      <aside class="rank-panel" id="rankPanel">
-        <h3 class="rank-panel-title">TOP访问</h3>
-        <ol class="rank-list" id="rankList"></ol>
+      <aside class="rank-panel usage-panel" id="rankPanel">
+        <div class="usage-panel-header">
+          <h3 class="rank-panel-title">使用统计</h3>
+          <div class="usage-tabs" id="usageTabs">
+            <button class="usage-tab active" data-range="today">今天</button>
+            <button class="usage-tab" data-range="7d">7天</button>
+            <button class="usage-tab" data-range="30d">30天</button>
+          </div>
+        </div>
+        <div class="usage-content" id="usageContent"></div>
       </aside>
     </div>
     <div class="add-form" id="addForm">
