@@ -94,6 +94,26 @@
       </div>
     </div>
   </div>
+
+  <!-- 快捷便签 -->
+  <button class="note-fab" id="noteFab" title="快捷便签">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    <span class="note-fab-dot" id="noteFabDot"></span>
+  </button>
+  <div class="note-panel" id="notePanel">
+    <div class="note-panel-header">
+      <span class="note-panel-title">快捷便签</span>
+      <button class="note-panel-close" id="notePanelClose">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <textarea class="note-textarea" id="noteTextarea" placeholder="随便写点东西..." maxlength="5000"></textarea>
+    <div class="note-panel-footer">
+      <span class="note-saved" id="noteSaved"></span>
+      <span class="note-count" id="noteCount">0</span>
+    </div>
+  </div>
+
   <script src="newtab.js"></script>
 </body>
 </html>

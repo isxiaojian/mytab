@@ -1215,3 +1215,150 @@ body {
   padding: 40px;
   font-size: 12px;
 }
+
+/* Note FAB */
+.note-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-md);
+  z-index: 100;
+  transition: transform 0.15s, box-shadow 0.15s, color 0.15s;
+}
+
+.note-fab:hover {
+  transform: scale(1.08);
+  box-shadow: var(--shadow-lg);
+  color: var(--accent);
+}
+
+.note-fab.open {
+  color: var(--accent);
+  box-shadow: var(--shadow-lg);
+}
+
+.note-fab-dot {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #34a853;
+  border: 1.5px solid var(--surface);
+  display: none;
+}
+
+.note-fab.has-content .note-fab-dot {
+  display: block;
+}
+
+/* Note Panel */
+.note-panel {
+  position: fixed;
+  bottom: 80px;
+  right: 24px;
+  width: 300px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity 0.15s, transform 0.15s;
+}
+
+.note-panel.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.note-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 8px;
+}
+
+.note-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.note-panel-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+}
+
+.note-panel-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.note-textarea {
+  width: 100%;
+  height: 200px;
+  padding: 8px 14px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.note-textarea::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+.note-panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 14px 10px;
+}
+
+.note-saved {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.note-saved.show {
+  opacity: 0.8;
+}
+
+.note-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.5;
+}

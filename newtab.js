@@ -1830,8 +1830,76 @@ document.getElementById('usageTabs').addEventListener('click', (e) => {
   loadRanking();
 });
 
+// --- Note ---
+const NOTE_KEY = 'mytab_note';
+const noteFab = document.getElementById('noteFab');
+const noteFabDot = document.getElementById('noteFabDot');
+const notePanel = document.getElementById('notePanel');
+const noteTextarea = document.getElementById('noteTextarea');
+const noteSaved = document.getElementById('noteSaved');
+const noteCount = document.getElementById('noteCount');
+let noteSaveTimer = null;
+
+async function loadNote() {
+  try {
+    const result = await chrome.storage.local.get(NOTE_KEY);
+    const data = result[NOTE_KEY];
+    if (data && data.content) {
+      noteTextarea.value = data.content;
+      updateNoteIndicator();
+    }
+  } catch (_) {}
+}
+
+function updateNoteIndicator() {
+  const hasContent = noteTextarea.value.trim().length > 0;
+  noteFab.classList.toggle('has-content', hasContent);
+  noteCount.textContent = noteTextarea.value.length;
+}
+
+async function saveNote() {
+  const content = noteTextarea.value;
+  await chrome.storage.local.set({ [NOTE_KEY]: { content, updatedAt: Date.now() } });
+  noteSaved.classList.add('show');
+  setTimeout(() => noteSaved.classList.remove('show'), 1200);
+}
+
+noteTextarea.addEventListener('input', () => {
+  updateNoteIndicator();
+  clearTimeout(noteSaveTimer);
+  noteSaveTimer = setTimeout(saveNote, 500);
+});
+
+noteFab.addEventListener('click', () => {
+  const isOpen = notePanel.classList.contains('show');
+  if (isOpen) {
+    notePanel.classList.remove('show');
+    noteFab.classList.remove('open');
+  } else {
+    notePanel.classList.add('show');
+    noteFab.classList.add('open');
+    noteTextarea.focus();
+  }
+});
+
+document.getElementById('notePanelClose').addEventListener('click', () => {
+  notePanel.classList.remove('show');
+  noteFab.classList.remove('open');
+});
+
+document.addEventListener('click', (e) => {
+  if (notePanel.classList.contains('show') &&
+      !notePanel.contains(e.target) &&
+      e.target !== noteFab &&
+      !noteFab.contains(e.target)) {
+    notePanel.classList.remove('show');
+    noteFab.classList.remove('open');
+  }
+});
+
 loadTheme();
 loadTopSites();
 loadRanking();
 loadBookmarks();
 loadEngine();
+loadNote();
