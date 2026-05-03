@@ -619,14 +619,15 @@ const GROUPS_KEY = 'mytab_site_groups';
 const MAX_SLOTS = 40;
 const HISTORY_PERMISSION = 'history';
 const BOOKMARKS_PERMISSION = 'bookmarks';
-const SITE_GROUPS = {
-  all: { label: '全部', color: '#5f6368' },
-  work: { label: '工作', color: '#1a73e8' },
-  study: { label: '学习', color: '#0f9d58' },
-  fun: { label: '娱乐', color: '#db4437' },
-  tool: { label: '工具', color: '#f4b400' },
-  other: { label: '其他', color: '#9aa0a6' },
-};
+const CATEGORIES = [
+  { key: 'work', label: '工作', color: '#1a73e8', domains: ['github.com', 'gitlab.com', 'docs.google.com', 'notion.so', 'figma.com', 'linear.app', 'slack.com', 'trello.com'] },
+  { key: 'study', label: '学习', color: '#0f9d58', domains: ['developer.mozilla.org', 'stackoverflow.com', 'wikipedia.org', 'medium.com', 'dev.to', 'coursera.org', 'udemy.com'] },
+  { key: 'fun', label: '娱乐', color: '#db4437', domains: ['youtube.com', 'bilibili.com', 'netflix.com', 'reddit.com', 'twitter.com', 'x.com', 'instagram.com'] },
+  { key: 'tool', label: '工具', color: '#f4b400', domains: ['google.com', 'bing.com', 'baidu.com', 'chatgpt.com', 'openai.com', 'translate.google.com', 'npmjs.com'] },
+  { key: 'other', label: '其他', color: '#9aa0a6', domains: [] },
+];
+const CATEGORY_MAP = new Map(CATEGORIES.map((c) => [c.key, c]));
+const SITE_GROUP_KEYS = ['work', 'study', 'tool', 'other'];
 const DEMO_SITES = [
   { title: 'GitHub', url: 'https://github.com/' },
   { title: 'MDN', url: 'https://developer.mozilla.org/' },
@@ -664,7 +665,7 @@ async function saveSiteGroups(groups) {
 
 function normalizeSiteGroups(groups) {
   for (const [url, group] of Object.entries(groups)) {
-    if (!url || !SITE_GROUPS[group] || group === 'all') {
+    if (!url || !CATEGORY_MAP.has(group)) {
       delete groups[url];
     }
   }
@@ -675,22 +676,24 @@ function getManualGroup(url) {
 }
 
 function getEffectiveGroup(site) {
-  if (site.group && SITE_GROUPS[site.group]) return site.group;
+  if (site.group && CATEGORY_MAP.has(site.group)) return site.group;
   const manualGroup = getManualGroup(site.url);
   if (manualGroup) return manualGroup;
   return classifyDomain(site.domain || '').key;
 }
 
 function getGroupLabel(group) {
-  return SITE_GROUPS[group]?.label || SITE_GROUPS.other.label;
+  const cat = CATEGORY_MAP.get(group);
+  return cat ? cat.label : CATEGORY_MAP.get('other').label;
 }
 
 function getGroupColor(group) {
-  return SITE_GROUPS[group]?.color || SITE_GROUPS.other.color;
+  const cat = CATEGORY_MAP.get(group);
+  return cat ? cat.color : CATEGORY_MAP.get('other').color;
 }
 
 function setActiveGroup(group) {
-  activeSiteGroup = SITE_GROUPS[group] ? group : 'all';
+  activeSiteGroup = CATEGORY_MAP.has(group) ? group : 'all';
   document.querySelectorAll('.site-group-tab').forEach((item) => {
     item.classList.toggle('active', item.dataset.group === activeSiteGroup);
   });
@@ -698,7 +701,7 @@ function setActiveGroup(group) {
 }
 
 async function setSiteGroup(url, group) {
-  if (!url || !SITE_GROUPS[group] || group === 'all') return;
+  if (!url || !CATEGORY_MAP.has(group)) return;
   siteGroupOverrides[url] = group;
   await saveSiteGroups(siteGroupOverrides);
   buildMergedGrid(await loadPinned());
@@ -986,23 +989,24 @@ function showCardMenu(card, position, site, pinned) {
   };
 
   const addGroupActions = () => {
-    addItem('设为工作', '', () => applyManualGroup(site, 'work'));
-    addItem('设为学习', '', () => applyManualGroup(site, 'study'));
-
-    addItem('设为工具', '', () => applyManualGroup(site, 'tool'));
-    addItem('设为其他', '', () => applyManualGroup(site, 'other'));
+    for (const { key, label } of CATEGORIES) {
+      if (SITE_GROUP_KEYS.includes(key)) {
+        addItem(`设为${label}`, '', () => applyManualGroup(site, key));
+      }
+    }
     addItem('恢复自动', '', () => applyManualGroup(site, null));
   };
 
+  addItem('重命名', '', () => {
+    const nameEl = card.querySelector('.site-name');
+    startRename(nameEl, position, pinned);
+  });
+  addItem('编辑网址', '', () => {
+    showEditUrlModal(position, site, pinned);
+  });
+  addGroupActions();
+
   if (site.pinned) {
-    addItem('重命名', '', () => {
-      const nameEl = card.querySelector('.site-name');
-      startRename(nameEl, position, pinned);
-    });
-    addItem('编辑网址', '', () => {
-      showEditUrlModal(position, site, pinned);
-    });
-    addGroupActions();
     addItem('取消固定', '', async () => {
       delete pinned[position];
       await savePinned(pinned);
@@ -1010,14 +1014,6 @@ function showCardMenu(card, position, site, pinned) {
     });
     addItem('移除', 'danger', () => removeCard(position, site, pinned));
   } else {
-    addItem('重命名', '', () => {
-      const nameEl = card.querySelector('.site-name');
-      startRename(nameEl, position, pinned);
-    });
-    addItem('编辑网址', '', () => {
-      showEditUrlModal(position, site, pinned);
-    });
-    addGroupActions();
     addItem('固定到此位置', '', () => togglePin(position, site, pinned));
     addItem('移除', 'danger', async () => {
       const hiddenSet = await loadHidden();
@@ -1445,38 +1441,6 @@ const USAGE_RANGES = {
   '7d': { label: '7天', days: 7 },
   '30d': { label: '30天', days: 30 },
 };
-const CATEGORY_RULES = [
-  {
-    key: 'work',
-    label: '工作',
-    color: '#1a73e8',
-    domains: ['github.com', 'gitlab.com', 'docs.google.com', 'notion.so', 'figma.com', 'linear.app', 'slack.com', 'trello.com'],
-  },
-  {
-    key: 'study',
-    label: '学习',
-    color: '#0f9d58',
-    domains: ['developer.mozilla.org', 'stackoverflow.com', 'wikipedia.org', 'medium.com', 'dev.to', 'coursera.org', 'udemy.com'],
-  },
-  {
-    key: 'fun',
-    label: '娱乐',
-    color: '#db4437',
-    domains: ['youtube.com', 'bilibili.com', 'netflix.com', 'reddit.com', 'twitter.com', 'x.com', 'instagram.com'],
-  },
-  {
-    key: 'tool',
-    label: '工具',
-    color: '#f4b400',
-    domains: ['google.com', 'bing.com', 'baidu.com', 'chatgpt.com', 'openai.com', 'translate.google.com', 'npmjs.com'],
-  },
-  {
-    key: 'other',
-    label: '其他',
-    color: '#9aa0a6',
-    domains: [],
-  },
-];
 
 let currentUsageRange = 'today';
 
@@ -1548,34 +1512,38 @@ async function collectUsageStats(startTime, endTime) {
   });
 
   const domainMap = new Map();
-  await Promise.all(historyItems.map(async (item) => {
-    let parsed;
-    try {
-      parsed = new URL(item.url);
-    } catch (_) {
-      return;
-    }
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < historyItems.length; i += BATCH_SIZE) {
+    const batch = historyItems.slice(i, i + BATCH_SIZE);
+    await Promise.all(batch.map(async (item) => {
+      let parsed;
+      try {
+        parsed = new URL(item.url);
+      } catch (_) {
+        return;
+      }
 
-    const visits = await getVisitsForUrl(item.url);
-    const visitsInRange = visits.filter((visit) =>
-      visit.visitTime >= startTime && visit.visitTime < endTime
-    );
-    if (!visitsInRange.length) return;
+      const visits = await getVisitsForUrl(item.url);
+      const visitsInRange = visits.filter((visit) =>
+        visit.visitTime >= startTime && visit.visitTime < endTime
+      );
+      if (!visitsInRange.length) return;
 
-    const domain = parsed.hostname.replace(/^www\./, '');
-    const existing = domainMap.get(domain);
-    const count = visitsInRange.length;
-    if (existing) {
-      existing.count += count;
-    } else {
-      domainMap.set(domain, {
-        domain,
-        title: item.title || domain,
-        url: `${parsed.protocol}//${parsed.hostname}/`,
-        count,
-      });
-    }
-  }));
+      const domain = parsed.hostname.replace(/^www\./, '');
+      const existing = domainMap.get(domain);
+      const count = visitsInRange.length;
+      if (existing) {
+        existing.count += count;
+      } else {
+        domainMap.set(domain, {
+          domain,
+          title: item.title || domain,
+          url: `${parsed.protocol}//${parsed.hostname}/`,
+          count,
+        });
+      }
+    }));
+  }
 
   const domains = [...domainMap.values()].sort((a, b) => b.count - a.count);
   const totalVisits = domains.reduce((sum, item) => sum + item.count, 0);
@@ -1597,7 +1565,7 @@ function getVisitsForUrl(url) {
 }
 
 function buildCategoryTotals(domains) {
-  const totals = new Map(CATEGORY_RULES.map((category) => [category.key, {
+  const totals = new Map(CATEGORIES.map((category) => [category.key, {
     ...category,
     count: 0,
   }]));
@@ -1611,13 +1579,13 @@ function buildCategoryTotals(domains) {
 }
 
 function classifyDomain(domain) {
-  for (const category of CATEGORY_RULES) {
+  for (const category of CATEGORIES) {
     if (category.key === 'other') continue;
     if (category.domains.some((known) => domain === known || domain.endsWith('.' + known))) {
       return category;
     }
   }
-  return CATEGORY_RULES.find((category) => category.key === 'other');
+  return CATEGORIES.find((category) => category.key === 'other');
 }
 
 function renderHistoryPermissionPrompt() {
