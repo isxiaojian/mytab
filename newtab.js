@@ -913,6 +913,7 @@ async function getCachedHistoryItems() {
 
 async function getTopSitesFromHistory() {
   const historyItems = await getCachedHistoryItems();
+  const now = Date.now();
 
   const urlMap = new Map();
   for (const item of historyItems) {
@@ -922,18 +923,30 @@ async function getTopSitesFromHistory() {
       const existing = urlMap.get(key);
       if (existing) {
         existing.count += item.visitCount || 1;
+        if (item.lastVisitTime && item.lastVisitTime > existing.lastVisitTime) {
+          existing.lastVisitTime = item.lastVisitTime;
+        }
       } else {
         urlMap.set(key, {
           title: key.replace(/^www\./, ''),
           url: `${u.protocol}//${u.hostname}/`,
           count: item.visitCount || 1,
+          lastVisitTime: item.lastVisitTime || 0,
         });
       }
     } catch (_) {}
   }
 
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const DECAY_DAYS = 7;
+
   return [...urlMap.values()]
-    .sort((a, b) => b.count - a.count);
+    .map((item) => {
+      const daysAgo = Math.max(0, (now - item.lastVisitTime) / DAY_MS);
+      item.score = item.count * Math.exp(-daysAgo / DECAY_DAYS);
+      return item;
+    })
+    .sort((a, b) => b.score - a.score);
 }
 
 let menuCard = null;
@@ -1786,6 +1799,31 @@ function formatCount(n) {
 }
 
 // --- Rank Toggle ---
+document.getElementById('refreshBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('refreshBtn');
+  const svg = btn.querySelector('svg');
+  if (btn.classList.contains('spinning')) return;
+  btn.classList.add('spinning');
+  svg.style.animation = 'spin 0.8s linear infinite';
+
+  try {
+    const [pinned, hiddenSet, groups] = await Promise.all([
+      loadPinned(),
+      loadHidden(),
+      loadSiteGroups(),
+    ]);
+    siteGroupOverrides = groups;
+    const sites = await fetchDynamicSites();
+    cachedDynamicSites = sites.filter((s) => !hiddenSet.has(s.url));
+    buildMergedGrid(pinned);
+  } catch (_) {}
+
+  setTimeout(() => {
+    svg.style.animation = '';
+    btn.classList.remove('spinning');
+  }, 300);
+});
+
 document.getElementById('addSiteBtn').addEventListener('click', async () => {
   const pinned = await loadPinned();
   showAddForm(pinned);
