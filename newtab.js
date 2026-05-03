@@ -415,11 +415,6 @@ function collectSelectableItems() {
 function applySiteFilters(queryLower = searchInput.value.trim().toLowerCase()) {
   const cards = document.querySelectorAll('.site-card');
   cards.forEach((card) => {
-    if (card.classList.contains('empty')) {
-      card.classList.toggle('filtered-out', !!queryLower || activeSiteGroup !== 'all');
-      return;
-    }
-
     const name = (card.querySelector('.site-name')?.textContent || '').toLowerCase();
     const title = (card.title || '').toLowerCase();
     const group = card.dataset.group || 'other';
@@ -552,7 +547,7 @@ searchInput.addEventListener('keydown', (e) => {
   if (!query) return;
 
   // 如果过滤后有匹配的网站卡片，打开第一个可见的
-  const visible = document.querySelector('.site-card:not(.filtered-out):not(.empty)');
+  const visible = document.querySelector('.site-card:not(.filtered-out)');
   if (query && visible) {
     const url = visible.dataset.url || visible.href;
     if (url && url.startsWith('http')) {
@@ -1052,28 +1047,7 @@ function renderGrid(slots, pinned) {
     const site = slots[i];
     const position = i;
 
-    if (!site) {
-      const empty = document.createElement('div');
-      empty.className = 'site-card empty';
-      empty.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        empty.classList.add('drag-over');
-      });
-      empty.addEventListener('dragleave', () => {
-        empty.classList.remove('drag-over');
-      });
-      empty.addEventListener('drop', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        empty.classList.remove('drag-over');
-        if (dragSrcPos !== null && dragSrcPos !== position) {
-          handleDrop(dragSrcPos, position, pinned);
-        }
-      });
-      grid.appendChild(empty);
-      continue;
-    }
+    if (!site) continue;
 
     const { url, title } = site;
     const domain = site.domain || getDomainFromUrl(url);
